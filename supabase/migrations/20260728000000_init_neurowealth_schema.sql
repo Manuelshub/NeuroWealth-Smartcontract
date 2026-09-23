@@ -132,6 +132,16 @@ CREATE POLICY "Users can view own earnings history" ON earnings_history FOR SELE
 -- Rebalances are public read for platform transparency
 CREATE POLICY "Rebalances are viewable by all authenticated users" ON rebalances FOR SELECT USING (true);
 
+-- Rebalances write policies: only agent and service role
+CREATE POLICY "Agent can insert rebalances" ON rebalances FOR INSERT WITH CHECK (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'agent' OR auth.role() = 'service_role'
+);
+CREATE POLICY "Agent can update rebalances" ON rebalances FOR UPDATE USING (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'agent' OR auth.role() = 'service_role'
+) WITH CHECK (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'agent' OR auth.role() = 'service_role'
+);
+
 CREATE POLICY "Service role can insert audit logs" ON audit_logs FOR INSERT WITH CHECK (auth.role() = 'service_role');
 CREATE POLICY "Admins can view audit logs" ON audit_logs FOR SELECT USING (
     auth.role() = 'service_role'
