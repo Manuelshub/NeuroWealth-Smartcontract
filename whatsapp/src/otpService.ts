@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 
 interface OTPRecord {
-  code: string;
+  codeHash: string;
   expiresAt: number; // Unix timestamp ms
   attempts: number;
 }
@@ -12,6 +12,18 @@ const MAX_ATTEMPTS = 3;
 // In-memory OTP storage keyed by phone number hash
 const otpStore = new Map<string, OTPRecord>();
 
+function hashOTP(code: string): string {
+  return crypto.createHash('sha256').update(code).digest('hex');
+}
+
+function isOTPMatch(storedHash: string, inputCode: string): boolean {
+  const inputHash = hashOTP(inputCode.trim());
+  const stored = Buffer.from(storedHash, 'hex');
+  const input = Buffer.from(inputHash, 'hex');
+
+  return stored.length === input.length && crypto.timingSafeEqual(stored, input);
+}
+
 /**
  * Generates a 6-digit numeric OTP that expires after 5 minutes.
  */
@@ -20,7 +32,7 @@ export function generateOTP(phoneHash: string): string {
   const expiresAt = Date.now() + OTP_TTL_MS;
 
   otpStore.set(phoneHash, {
-    code,
+    codeHash: hashOTP(code),
     expiresAt,
     attempts: 0
   });
@@ -49,7 +61,7 @@ export function verifyOTP(phoneHash: string, inputCode: string): { success: bool
     return { success: false, message: 'Too many invalid attempts. Please request a new OTP code.' };
   }
 
-  if (record.code !== inputCode.trim()) {
+  if (!isOTPMatch(record.codeHash, inputCode)) {
     record.attempts += 1;
     return { success: false, message: `Invalid OTP code. ${MAX_ATTEMPTS - record.attempts} attempts remaining.` };
   }
