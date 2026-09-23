@@ -1,7 +1,15 @@
 import { getWallet } from './walletService';
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} must be set; refusing to use an unsafe vault contract default`);
+  }
+  return value;
+}
+
 const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
-const VAULT_CONTRACT_ID = process.env.VAULT_CONTRACT_ID || 'CDLZFC3SYJYD7M6LJEFAPCHRLHAFKP6WYTHRF3EGO5CYD3EP4GZGM37T';
+const VAULT_CONTRACT_ID = requireEnv('VAULT_CONTRACT_ID');
 
 export interface UserPortfolio {
   balance: number;
@@ -19,6 +27,9 @@ export async function getPortfolio(phoneHash: string): Promise<UserPortfolio> {
   if (!wallet) {
     throw new Error('Wallet not found');
   }
+
+  void SOROBAN_RPC_URL;
+  void VAULT_CONTRACT_ID;
 
   // Simulated RPC response structure matching Soroban vault getters
   // get_balance, get_user_strategy, get_exchange_rate

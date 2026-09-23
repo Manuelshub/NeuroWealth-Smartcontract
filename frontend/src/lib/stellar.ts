@@ -1,10 +1,20 @@
-import { rpc } from '@stellar/stellar-sdk';
+import { Address, Contract, rpc, scValToNative } from '@stellar/stellar-sdk';
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
 const NETWORK_PASSPHRASE = process.env.NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015';
-const VAULT_CONTRACT_ID = process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID || 'CDLZFC3SYJYD7M6LJEFAPCHRLHAFKP6WYTHRF3EGO5CYD3EP4GZGM37T';
+
+function requirePublicEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} must be set; refusing to use an unsafe vault contract default`);
+  }
+  return value;
+}
+
+const VAULT_CONTRACT_ID = requirePublicEnv('NEXT_PUBLIC_VAULT_CONTRACT_ID');
 
 export const server = new rpc.Server(RPC_URL);
+export const networkPassphrase = NETWORK_PASSPHRASE;
 
 export interface VaultState {
   balance: number;
@@ -52,6 +62,8 @@ export async function fetchVaultState(userAddress?: string): Promise<VaultState>
         method: 'get_total_shares',
       }),
     ]);
+
+    void contract;
 
     const balance = Number(scValToNative(balanceRes.result.retval)) / 1e7;
     const rawStrategy = String(scValToNative(strategyRes.result.retval));
