@@ -333,26 +333,15 @@ pub enum VaultError {
 }
 
 impl VaultError {
-    pub const NegativeMin: Self = Self::InvalidStrategy;
-    pub const NegativeMax: Self = Self::InvalidStrategy;
-    pub const MaxLessThanMin: Self = Self::InvalidStrategy;
-    pub const MinimumDepositTooLow: Self = Self::InvalidStrategy;
-    pub const MaximumDepositBelowMinimum: Self = Self::InvalidStrategy;
-    pub const ShareConversionOverflow: Self = Self::InvalidStrategy;
-    pub const TotalDepositsOverflow: Self = Self::InvalidStrategy;
-    pub const SharesOverflow: Self = Self::InvalidStrategy;
-    pub const TotalSharesOverflow: Self = Self::InvalidStrategy;
-    pub const TotalAssetsOverflow: Self = Self::InvalidStrategy;
-    pub const ShareToAssetConversionOverflow: Self = Self::InvalidStrategy;
-    pub const ExchangeRateOverflow: Self = Self::InvalidStrategy;
-    pub const WithdrawalUnderflow: Self = Self::InvalidStrategy;
-    pub const MaxDecreaseOverflow: Self = Self::InvalidStrategy;
-    pub const TotalAvailableOverflow: Self = Self::InvalidStrategy;
-    pub const VersionOverflow: Self = Self::InvalidStrategy;
-    pub const InvalidWasmHash: Self = Self::InvalidStrategy;
-    // The SDK caps `#[contracterror]` at 50 cases. Extra names stay as
-    // associated constants (same pattern as `InvalidWasmHash`) so call sites
-    // compile without growing the on-chain error enum past the spec limit.
+    // The SDK caps `#[contracterror]` at 50 cases. Deprecated overflow and configuration
+    // error aliases have been removed. Call sites must use the primary error codes instead:
+    // - Arithmetic overflows → AmountMustBePositive or specific validation errors
+    // - Configuration validation → use specific enum variants (e.g., TvlCapBelowUserDepositCap)
+    // - Deprecated config names → use primary names (e.g., InvalidStrategy directly)
+    //
+    // Remaining aliases map to logically equivalent codes and are retained for source
+    // compatibility with existing clients and tests until they can be migrated.
+
     pub const DeployerCannotBeZeroAddress: Self = Self::UnauthorizedDeployer;
     pub const OwnerCannotBeZeroAddress: Self = Self::CallerIsNotOwner;
     pub const AgentCannotBeZeroAddress: Self = Self::UnauthorizedDeployer;
@@ -361,13 +350,8 @@ impl VaultError {
     pub const MigrationPaused: Self = Self::Paused;
     pub const InvalidMigrationTarget: Self = Self::InvalidStrategy;
     pub const NoSharesToMigrate: Self = Self::NoSharesToWithdraw;
-    pub const SharesAlreadyLocked: Self = Self::InvalidStrategy;
-    pub const LockPeriodNotEnded: Self = Self::InvalidStrategy;
-    pub const InvalidLockDuration: Self = Self::InvalidStrategy;
     pub const InsufficientUnlockedShares: Self = Self::InsufficientShares;
     pub const EmergencyWithdrawalNotAllowed: Self = Self::NotPaused;
-    pub const HoldingPeriodNotElapsed: Self = Self::InvalidStrategy;
-    pub const InvalidHoldingPeriod: Self = Self::InvalidStrategy;
 }
 
 // ============================================================================
@@ -5349,9 +5333,9 @@ impl NeuroWealthVault {
     /// # Errors
     ///
     /// Returns:
-    /// - `VaultError::NegativeMin` if min is negative.
-    /// - `VaultError::NegativeMax` if max is negative.
-    /// - `VaultError::MaxLessThanMin` if max < min.
+    /// - `VaultError::AmountMustBePositive` if min is negative.
+    /// - `VaultError::AmountMustBePositive` if max is negative.
+    /// - `VaultError::TvlCapBelowUserDepositCap` if max < min.
     ///
     /// # Panics
     ///
@@ -5361,13 +5345,13 @@ impl NeuroWealthVault {
         Self::require_is_owner(&env);
 
         if min < 0 {
-            return Err(VaultError::NegativeMin);
+            return Err(VaultError::AmountMustBePositive);
         }
         if max < 0 {
-            return Err(VaultError::NegativeMax);
+            return Err(VaultError::AmountMustBePositive);
         }
         if max < min {
-            return Err(VaultError::MaxLessThanMin);
+            return Err(VaultError::TvlCapBelowUserDepositCap);
         }
 
         let old_user_cap: i128 = env
@@ -6763,11 +6747,11 @@ impl NeuroWealthVault {
             !env.storage().instance().has(&MultiAssetKey::Config(asset.clone())),
             VaultError::AlreadyInitialized,
         );
-        Self::require(&env, min_deposit >= 0, VaultError::NegativeMin);
-        Self::require(&env, deposit_limit >= 0, VaultError::NegativeMax);
+        Self::require(&env, min_deposit >= 0, VaultError::AmountMustBePositive);
+        Self::require(&env, deposit_limit >= 0, VaultError::AmountMustBePositive);
         Self::require(&env, tvl_cap >= 0, VaultError::TvlCapCannotBeNegative);
         if deposit_limit > 0 {
-            Self::require(&env, min_deposit <= deposit_limit, VaultError::MaxLessThanMin);
+            Self::require(&env, min_deposit <= deposit_limit, VaultError::TvlCapBelowUserDepositCap);
         }
 
         env.storage().instance().set(
@@ -6820,11 +6804,11 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
 
-        Self::require(&env, min_deposit >= 0, VaultError::NegativeMin);
-        Self::require(&env, deposit_limit >= 0, VaultError::NegativeMax);
+        Self::require(&env, min_deposit >= 0, VaultError::AmountMustBePositive);
+        Self::require(&env, deposit_limit >= 0, VaultError::AmountMustBePositive);
         Self::require(&env, tvl_cap >= 0, VaultError::TvlCapCannotBeNegative);
         if deposit_limit > 0 {
-            Self::require(&env, min_deposit <= deposit_limit, VaultError::MaxLessThanMin);
+            Self::require(&env, min_deposit <= deposit_limit, VaultError::TvlCapBelowUserDepositCap);
         }
 
         let mut config: AssetConfig = env
@@ -7517,7 +7501,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             new_wasm_hash != BytesN::from_array(&env, &[0u8; 32]),
-            VaultError::InvalidWasmHash,
+            VaultError::UnauthorizedDeployer,
         );
 
         let effective_ledger = env
