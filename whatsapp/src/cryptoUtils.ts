@@ -1,15 +1,27 @@
 import crypto from 'crypto';
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-secret-key-neurowealth!!'; // Must be 32 chars
 const ALGORITHM = 'aes-256-gcm';
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} must be set; refusing to use an unsafe production default`);
+  }
+  return value;
+}
+
+const ENCRYPTION_KEY = requireEnv('ENCRYPTION_KEY');
+if (ENCRYPTION_KEY.length < 32) {
+  throw new Error('ENCRYPTION_KEY must be at least 32 characters');
+}
+const PHONE_HASH_SALT = requireEnv('PHONE_HASH_SALT');
 
 /**
  * Hashes phone number to ensure PII privacy at rest.
- * Uses SHA-256 with a salt.
+ * Uses SHA-256 with a deployment-provided salt.
  */
 export function hashPhoneNumber(phone: string): string {
-  const salt = process.env.PHONE_HASH_SALT || 'neurowealth-phone-salt';
-  return crypto.createHash('sha256').update(phone + salt).digest('hex');
+  return crypto.createHash('sha256').update(phone + PHONE_HASH_SALT).digest('hex');
 }
 
 /**

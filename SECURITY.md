@@ -807,3 +807,18 @@ codes, since an over-limit transaction itself is reverted by the host.
 - Rate limits do not stop a user from creating many addresses; retain the TVL
   cap, user deposit cap, fee policy, and authentication checks as the sybil
   resistance layer.
+
+## Deployment Configuration Fail-Closed Policy
+
+Production-sensitive defaults must not be embedded in application source. The WhatsApp encryption key, phone hashing salt, and vault contract identifiers must come from deployment environment variables. If any of these values are missing, the affected service should fail during startup rather than silently falling back to a shared development secret or stale testnet contract id.
+
+CI enforces this posture with `scripts/check-no-production-defaults.py`, which is run from the secret-scan job. The check is intentionally narrow and focused on the env vars that would create direct custody, privacy, or routing risk if a default value drifted into production code.
+
+Required fail-closed values:
+
+| Variable | Used by | Risk if defaulted |
+| --- | --- | --- |
+| `ENCRYPTION_KEY` | WhatsApp custodial secret encryption | Shared fallback key could decrypt every stored user signing secret |
+| `PHONE_HASH_SALT` | WhatsApp phone-number hashing | Shared fallback salt weakens PII privacy and cross-environment isolation |
+| `VAULT_CONTRACT_ID` | WhatsApp vault routing | Bot could submit or simulate against a stale contract |
+| `NEXT_PUBLIC_VAULT_CONTRACT_ID` | Frontend vault reads | UI could display balances or submit flows against a stale contract |

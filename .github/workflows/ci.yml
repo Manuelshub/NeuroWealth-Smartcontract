@@ -38,6 +38,9 @@ jobs:
       - name: Env templates & key files policy (#766)
         run: python3 scripts/check-env-templates.py
 
+      - name: Production defaults policy (#820)
+        run: python3 scripts/check-no-production-defaults.py
+
       # The gitleaks CLI is used directly (pinned + checksum-verified) rather
       # than gitleaks-action, which requires a paid GITLEAKS_LICENSE on
       # organization-owned repositories.
@@ -88,6 +91,9 @@ jobs:
           - name: "Agent Typecheck, Lint & Tests"
             step: "agent-check"
             working_directory: "agent"
+          - name: "WhatsApp Typecheck & Tests"
+            step: "whatsapp-check"
+            working_directory: "whatsapp"
           - name: "Build WASM"
             step: "build-wasm"
             working_directory: "neurowealth-vault"
@@ -185,6 +191,10 @@ jobs:
               npm run lint
               npm test
               npm run build
+              ;;
+            whatsapp-check)
+              npm ci
+              npm test
               ;;
             build-wasm)
               RUSTFLAGS="-C target-cpu=mvp" cargo build \
