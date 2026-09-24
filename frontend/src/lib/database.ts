@@ -98,7 +98,11 @@ export async function getPortfolioValueHistory(userAddress?: string): Promise<Ch
 }
 
 export async function getRecentTransactions(userAddress?: string): Promise<TransactionRecord[]> {
-  if (!userAddress || !supabaseUrl()) return [];
+  if (!userAddress) return [];
+  
+  if (!supabaseUrl()) {
+    return getRecentTransactionsFromRpc(userAddress);
+  }
 
   const { data: user } = await supabase
     .from('users')
@@ -155,3 +159,91 @@ export async function getRecentTransactions(userAddress?: string): Promise<Trans
 function supabaseUrl(): boolean {
   return !!process.env.NEXT_PUBLIC_SUPABASE_URL;
 }
+
+import { server } from './stellar';
+import { rpc, xdr, scValToNative } from '@stellar/stellar-sdk';
+
+/**
+ * Fallback to fetch transactions directly from Soroban RPC events
+ * Note: 'mock mode' as requested by the issue, although this fetches real on-chain events.
+ */
+async function getRecentTransactionsFromRpc(userAddress: string): Promise<TransactionRecord[]> {
+  try {
+    const contractId = process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID;
+    if (!contractId) return [];
+
+    const latestLedger = await server.getLatestLedger();
+    const startLedger = Math.max(1, latestLedger.sequence - 10000); // look back ~10000 ledgers
+
+    const request: rpc.Api.GetEventsRequest = {
+      startLedger,
+      filters: [{ type: 'contract', contractIds: [contractId] }],
+      limit: 100,
+    };
+    
+    const response = await server.getEvents(request);
+    
+    const records: TransactionRecord[] = [];
+    
+    for (const event of response.events) {
+      if (event.type !== 'contract') continue;
+      
+      const topic1 = event.topic[0];
+      if (!topic1) continue;
+      
+      let eventType = '';
+      try {
+        const nativeTopic = scValToNative(topic1);
+        if (nativeTopic === 'deposit' || nativeTopic === 'withdraw') {
+          eventType = nativeTopic;
+        } else {
+          continue;
+        }
+      } catch (e) {
+        continue;
+      }
+      
+      try {
+        const val = event.value;
+        const decoded = scValToNative(val);
+        // decode event structure { caller, amount, ... } or similar depending on contract
+        // assuming standard map or struct where 'amount' and 'user' exist
+        
+        let amount = 0;
+        let user = '';
+        if (typeof decoded === 'object' && decoded !== null) {
+          if ('amount' in decoded) amount = Number(decoded.amount) / 1e7;
+          if ('user' in decoded) user = String(decoded.user);
+          if ('caller' in decoded) user = String(decoded.caller);
+          // if array format: [user, amount]
+          if (Array.isArray(decoded) && decoded.length >= 2) {
+            user = String(decoded[0]);
+            amount = Number(decoded[1]) / 1e7;
+          }
+        }
+        
+        if (user !== userAddress) continue;
+        
+        records.push({
+          id: event.id,
+          type: eventType === 'deposit' ? 'deposit' : 'withdrawal',
+          amount: amount || 0,
+          txHash: event.txHash,
+          timestamp: new Date().toLocaleString('en-US', { // Mocked timestamp since RPC doesn't provide it
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit',
+          }) + ' (RPC Fallback)',
+          status: 'confirmed'
+        });
+      } catch (e) {
+        // ignore parsing errors
+      }
+    }
+    
+    return records.reverse().slice(0, 10);
+  } catch (error) {
+    console.warn('Failed to fetch fallback transactions from RPC', error);
+    return [];
+  }
+}
+

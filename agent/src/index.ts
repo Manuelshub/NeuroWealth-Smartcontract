@@ -6,6 +6,8 @@ import { runRebalanceCycle } from './userStrategies';
 import healthRouter, { configureHealthChecks } from './health';
 import logger from './logger';
 import { initializeTracing } from './tracing';
+import { submitAutoCompoundTx, submitRebalanceTx } from './sorobanTx';
+import { getCurrentAllocation } from './userStrategies';
 
 import { ipRateLimiter, userRateLimiter } from './rateLimiter';
 
@@ -31,18 +33,14 @@ let decisionInterval: ReturnType<typeof setInterval> | null = null;
  *                 the available yield is below this threshold.
  */
 async function autoCompound(minOut: number = 0): Promise<void> {
-  const vaultAddress = process.env.VAULT_ADDRESS;
+  const vaultAddress = process.env.VAULT_ADDRESS || process.env.VAULT_CONTRACT_ID;
   if (!vaultAddress) {
     throw new Error("VAULT_ADDRESS environment variable is not set");
   }
 
   console.log(`Auto-compounding yield on vault ${vaultAddress} with min_out=${minOut}`);
 
-  // TODO: Replace with a real Soroban contract invocation, e.g.:
-  // const vault = new Contract(vaultAddress);
-  // await vault.call('auto_compound', minOut);
-  // This is intentionally left as a placeholder because the RPC client
-  // configuration is environment-specific.
+  await submitAutoCompoundTx(minOut);
 }
 
 function startDecisionLoop() {
@@ -69,6 +67,18 @@ function startDecisionLoop() {
         console.log(`Hourly check: Yield is optimal. No action needed.`);
         // Yield is already in the best protocol; compound it for maximum growth
         await autoCompound(0);
+      } else if (usersEvaluated > 0 && rebalanceNeeded) {
+        console.log(`Hourly check: Rebalance needed.`);
+        const currentAllocation = await getCurrentAllocation(pool);
+        
+        // Batch rebalances: iterate through decisions and trigger rebalance for target protocols.
+        // Since it's a single vault, we just pick the first valid target protocol to rebalance to.
+        const decisionToRebalance = [...decisions.values()].find((d) => d.shouldRebalance && d.targetProtocol);
+        
+        if (decisionToRebalance?.targetProtocol) {
+          logger.info({ targetProtocol: decisionToRebalance.targetProtocol }, 'Submitting batch rebalance transaction');
+          await submitRebalanceTx(decisionToRebalance.targetProtocol, currentAllocation.apy);
+        }
       }
     } catch (error) {
       logger.error({ error: error instanceof Error ? error.message : error }, 'Decision loop error');

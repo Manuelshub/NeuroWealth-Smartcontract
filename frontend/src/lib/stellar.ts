@@ -1,8 +1,5 @@
 import { Address, Contract, rpc, scValToNative } from '@stellar/stellar-sdk';
 
-const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
-const NETWORK_PASSPHRASE = process.env.NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015';
-
 function requirePublicEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -11,6 +8,8 @@ function requirePublicEnv(name: string): string {
   return value;
 }
 
+const RPC_URL = requirePublicEnv('NEXT_PUBLIC_SOROBAN_RPC_URL');
+const NETWORK_PASSPHRASE = requirePublicEnv('NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE');
 const VAULT_CONTRACT_ID = requirePublicEnv('NEXT_PUBLIC_VAULT_CONTRACT_ID');
 
 export const server = new rpc.Server(RPC_URL);
