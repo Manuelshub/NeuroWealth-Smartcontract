@@ -10,7 +10,7 @@ import { generateOTP, verifyOTP } from './otpService';
 import { createCustodialWallet, getWallet } from './walletService';
 import { parseIntent } from './intentParser';
 import { validateIntent } from './contractLimits';
-import { getPortfolio, handleDeposit, handleWithdraw } from './vaultRouter';
+import { getPortfolio, handleDeposit, handleWithdraw, handleStrategyUpdate } from './vaultRouter';
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -69,7 +69,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
 
         if (verification.success) {
           updateState(phoneHash, UserState.VERIFIED);
-          const wallet = createCustodialWallet(phoneHash);
+          const wallet = await createCustodialWallet(phoneHash);
 
           twiml.message(
             `✅ Phone number verified!\n\n` +
@@ -93,7 +93,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
 
     // Flow 3: VERIFIED User -> Handle Chat Intents
     if (session.state === UserState.VERIFIED) {
-      const wallet = getWallet(phoneHash);
+      const wallet = await getWallet(phoneHash);
       if (!wallet) {
         // Fallback state sync
         updateState(phoneHash, UserState.UNVERIFIED);
@@ -151,7 +151,12 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
         }
 
         case 'STRATEGY': {
-          twiml.message(`✅ Strategy updated to ${intent.strategy?.toUpperCase()}. The AI agent will rebalance your portfolio on the next scheduled run.`);
+          if (!intent.strategy) {
+            twiml.message('❌ Please specify a valid strategy.');
+            break;
+          }
+          const result = await handleStrategyUpdate(phoneHash, intent.strategy);
+          twiml.message(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
           break;
         }
 
