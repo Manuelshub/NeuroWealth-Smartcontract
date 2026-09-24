@@ -47,11 +47,14 @@ export async function startEventListener() {
     // If the saved cursor cannot be read we refuse to start rather than
     // silently skipping to the latest ledger.
     const stored = await withRetry(() => cursor.load(), 'loadLedgerCursor');
-    let position: EventPosition = initialPosition(stored, latestLedgerResponse.sequence);
+    const startSequence = process.env.START_LEDGER
+      ? parseInt(process.env.START_LEDGER, 10)
+      : latestLedgerResponse.sequence;
+    let position: EventPosition = initialPosition(stored, startSequence);
     if (stored) {
       logger.info({ pagingToken: stored.pagingToken, ledger: stored.ledger, latestLedger: latestLedgerResponse.sequence }, 'Resuming event listener from saved cursor');
     } else {
-      logger.info({ startLedger: latestLedgerResponse.sequence }, 'Starting event listener from latest ledger (no saved cursor)');
+      logger.info({ startLedger: startSequence }, 'Starting event listener from initial ledger (no saved cursor)');
     }
 
     const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [VAULT_CONTRACT_ID] }];
@@ -63,42 +66,55 @@ export async function startEventListener() {
       if (polling) return;
       polling = true;
       try {
-        let response: rpc.Api.GetEventsResponse;
-        try {
-          const request: rpc.Api.GetEventsRequest = 'cursor' in position
-            ? { filters, cursor: position.cursor, limit: EVENTS_PAGE_LIMIT }
-            : { filters, startLedger: position.startLedger, limit: EVENTS_PAGE_LIMIT };
-          response = await withRetry(() => server.getEvents(request), 'getEvents');
-        } catch (error) {
-          if ('cursor' in position && isStalePositionError(error)) {
-            const latest = await withRetry(() => server.getLatestLedger(), 'getLatestLedger');
-            logger.error(
-              { pagingToken: position.cursor, resumeLedger: latest.sequence, error: error instanceof Error ? error.message : error },
-              'Saved event cursor is outside the RPC retention window; events in the gap were MISSED and need manual backfill',
-            );
-            position = { startLedger: latest.sequence };
+        let hasMorePages = true;
+        let pageCount = 0;
+        const MAX_PAGES = 10; // Cap to prevent infinite loops in one tick
+
+        while (hasMorePages && pageCount < MAX_PAGES) {
+          let response: rpc.Api.GetEventsResponse;
+          try {
+            const request: rpc.Api.GetEventsRequest = 'cursor' in position
+              ? { filters, cursor: position.cursor, limit: EVENTS_PAGE_LIMIT }
+              : { filters, startLedger: position.startLedger, limit: EVENTS_PAGE_LIMIT };
+            response = await withRetry(() => server.getEvents(request), 'getEvents');
+          } catch (error) {
+            if ('cursor' in position && isStalePositionError(error)) {
+              const latest = await withRetry(() => server.getLatestLedger(), 'getLatestLedger');
+              logger.error(
+                { pagingToken: position.cursor, resumeLedger: latest.sequence, error: error instanceof Error ? error.message : error },
+                'Saved event cursor is outside the RPC retention window; events in the gap were MISSED and need manual backfill',
+              );
+              position = { startLedger: latest.sequence };
+              break; // Break the while loop to retry from tip on the next tick
+            }
+            throw error;
           }
-          throw error;
-        }
 
-        for (const event of response.events) {
-          const eventType = vaultEventType(event.topic);
+          for (const event of response.events) {
+            const eventType = vaultEventType(event.topic);
 
-          if (eventType) {
-            await handleVaultEvent(eventType, event);
+            if (eventType) {
+              await handleVaultEvent(eventType, event);
+            }
+
+            // Event ids are paging tokens: persist after each event so a
+            // restart resumes right after the last handled one.
+            position = { cursor: event.id };
+            await cursor.save(event.id, event.ledger);
           }
 
-          // Event ids are paging tokens: persist after each event so a
-          // restart resumes right after the last handled one.
-          position = { cursor: event.id };
-          await cursor.save(event.id, event.ledger);
-        }
+          // The page cursor also covers the scanned range with no matching
+          // events, so idle periods are not rescanned after a restart.
+          if (response.cursor) {
+            position = { cursor: response.cursor };
+            await cursor.save(response.cursor, response.latestLedger);
+          }
 
-        // The page cursor also covers the scanned range with no matching
-        // events, so idle periods are not rescanned after a restart.
-        if (response.cursor) {
-          position = { cursor: response.cursor };
-          await cursor.save(response.cursor, response.latestLedger);
+          if (response.events.length < EVENTS_PAGE_LIMIT) {
+            hasMorePages = false;
+          } else {
+            pageCount++;
+          }
         }
       } catch (error) {
         logger.error({ error: error instanceof Error ? error.message : error }, 'Error polling Soroban events');
