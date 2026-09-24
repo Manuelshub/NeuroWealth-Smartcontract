@@ -1,7 +1,8 @@
 import {
   isConnected as checkFreighterConnected,
   getPublicKey as getFreighterPublicKey,
-  signTransaction as signFreighterTx
+  signTransaction as signFreighterTx,
+  getNetworkDetails
 } from '@stellar/freighter-api';
 
 export interface FreighterWalletState {
@@ -46,8 +47,19 @@ export async function connectFreighterWallet(): Promise<string | null> {
  */
 export async function signWithFreighter(xdr: string, networkPassphrase?: string): Promise<string | null> {
   try {
+    const requiredPassphrase = networkPassphrase || process.env.NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE;
+    
+    if (!requiredPassphrase) {
+      throw new Error('Network passphrase is not configured in the environment.');
+    }
+
+    const networkDetails = await getNetworkDetails();
+    if (networkDetails.networkPassphrase !== requiredPassphrase) {
+      throw new Error(`Freighter is connected to the wrong network. Expected network passphrase: ${requiredPassphrase}`);
+    }
+
     const signedXdr = await signFreighterTx(xdr, {
-      networkPassphrase: networkPassphrase || 'Test SDF Network ; September 2015'
+      networkPassphrase: requiredPassphrase
     });
     return signedXdr;
   } catch (err) {
