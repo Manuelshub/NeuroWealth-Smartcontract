@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "tsc && node --test \"dist/__tests__/*.test.js\""
+    "test": "tsc && node --test dist/__tests__/otp-service.test.js dist/__tests__/intent-parser.test.js dist/__tests__/wallet-service.test.js dist/__tests__/vault-router.test.js dist/__tests__/webhook.test.js dist/__tests__/contractLimits.test.js dist/__tests__/twilioSignature.test.js"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^13.0.0",

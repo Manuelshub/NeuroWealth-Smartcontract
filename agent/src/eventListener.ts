@@ -13,7 +13,6 @@ export { pool };
 const rpcUrl = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
 export const server = new rpc.Server(rpcUrl);
 
-const VAULT_CONTRACT_ID = process.env.VAULT_CONTRACT_ID || '';
 const EVENTS_PAGE_LIMIT = 100;
 
 let eventInterval: ReturnType<typeof setInterval> | null = null;
@@ -31,7 +30,7 @@ export function stopEventListener() {
  * Detects new deposits within 5 seconds and triggers yield deployment.
  */
 export async function startEventListener() {
-  if (!VAULT_CONTRACT_ID) {
+  if (!process.env.VAULT_CONTRACT_ID) {
     logger.warn('VAULT_CONTRACT_ID is not set. Event listener requires a contract ID to monitor.');
     return;
   }
@@ -52,7 +51,7 @@ export async function startEventListener() {
       logger.info({ startLedger: latestLedgerResponse.sequence }, 'Starting event listener from latest ledger (no saved cursor)');
     }
 
-    const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [VAULT_CONTRACT_ID] }];
+    const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [process.env.VAULT_CONTRACT_ID!] }];
     let polling = false;
 
     eventInterval = setInterval(async () => {
