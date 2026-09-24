@@ -1,3 +1,4 @@
+import { Address, rpc, scValToNative } from '@stellar/stellar-sdk';
 import { getWallet } from './walletService';
 
 function requireEnv(name: string): string {
@@ -19,6 +20,12 @@ export interface UserPortfolio {
   dailyEarnings: number;
 }
 
+const STRATEGY_MAP: Record<string, string> = {
+  conservative: 'Conservative',
+  balanced: 'Balanced',
+  growth: 'Growth',
+};
+
 /**
  * Reads vault state and portfolio details for a verified WhatsApp user.
  */
@@ -28,24 +35,67 @@ export async function getPortfolio(phoneHash: string): Promise<UserPortfolio> {
     throw new Error('Wallet not found');
   }
 
-  void SOROBAN_RPC_URL;
-  void VAULT_CONTRACT_ID;
+  const server = new rpc.Server(SOROBAN_RPC_URL);
+  const address = new Address(wallet.publicKey);
 
-  // Simulated RPC response structure matching Soroban vault getters
-  // get_balance, get_user_strategy, get_exchange_rate
-  const simulatedBalance = 100.25;
-  const simulatedUsd = 100.25;
-  const simulatedStrategy = 'Balanced';
-  const simulatedApy = 8.4;
-  const simulatedDailyEarnings = 0.23;
+  try {
+    const [balanceRes, strategyRes, exchangeRateRes, totalAssetsRes, totalSharesRes] = await Promise.all([
+      server.simulateContractInvocation({
+        contractAddress: VAULT_CONTRACT_ID,
+        method: 'get_balance',
+        methodArgs: { user: address.toScVal() },
+      }),
+      server.simulateContractInvocation({
+        contractAddress: VAULT_CONTRACT_ID,
+        method: 'get_user_strategy',
+        methodArgs: { user: address.toScVal() },
+      }),
+      server.simulateContractInvocation({
+        contractAddress: VAULT_CONTRACT_ID,
+        method: 'get_exchange_rate',
+      }),
+      server.simulateContractInvocation({
+        contractAddress: VAULT_CONTRACT_ID,
+        method: 'get_total_assets',
+      }),
+      server.simulateContractInvocation({
+        contractAddress: VAULT_CONTRACT_ID,
+        method: 'get_total_shares',
+      }),
+    ]);
 
-  return {
-    balance: simulatedBalance,
-    usdEquivalent: simulatedUsd,
-    strategy: simulatedStrategy,
-    apy: simulatedApy,
-    dailyEarnings: simulatedDailyEarnings
-  };
+    const balance = Number(scValToNative(balanceRes.result.retval)) / 1e7;
+    const rawStrategy = String(scValToNative(strategyRes.result.retval));
+    const strategy = STRATEGY_MAP[rawStrategy] || 'Balanced';
+    const exchangeRateRaw = Number(scValToNative(exchangeRateRes.result.retval)) / 1e7;
+    const totalAssets = Number(scValToNative(totalAssetsRes.result.retval)) / 1e7;
+    const totalShares = Number(scValToNative(totalSharesRes.result.retval)) / 1e7;
+
+    const exchangeRate = exchangeRateRaw || (totalShares > 0 ? totalAssets / totalShares : 1.0);
+    const apy = totalAssets > 0 && totalShares > 0
+      ? Number((((totalAssets / totalShares - 1) * 365 * 100).toFixed(2)))
+      : 0;
+
+    const usdEquivalent = balance * exchangeRate;
+    const dailyEarnings = balance > 0 ? (balance * (apy / 100)) / 365 : 0;
+
+    return {
+      balance,
+      usdEquivalent,
+      strategy,
+      apy,
+      dailyEarnings: Number(dailyEarnings.toFixed(4))
+    };
+  } catch (err) {
+    console.warn('Failed to fetch vault state from Soroban RPC:', err);
+    return {
+      balance: 0,
+      usdEquivalent: 0,
+      strategy: 'Balanced',
+      apy: 0,
+      dailyEarnings: 0
+    };
+  }
 }
 
 /**
