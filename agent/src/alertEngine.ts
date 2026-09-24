@@ -1,8 +1,15 @@
+import logger from './logger';
+import { AlertEventPayload, parseAlertEventPayload } from './alertEventPayload';
+
 export interface AlertRule {
     name: string;
     description: string;
-    check: (event: any, state: any) => boolean;
+    check: (event: AlertEventPayload, state: VaultAlertState) => boolean;
     severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+}
+
+interface VaultAlertState {
+    totalAssets: number;
 }
 
 export const alertRules: AlertRule[] = [
@@ -32,18 +39,28 @@ export const alertRules: AlertRule[] = [
     },
 ];
 
-export async function processEventForAlerts(event: any) {
+export async function processEventForAlerts(event: unknown): Promise<string[]> {
+    const parsed = parseAlertEventPayload(event);
+    if (!parsed.ok) {
+        logger.warn({ reason: parsed.reason, event }, 'Dropping invalid or unknown alert event');
+        return [];
+    }
+
     // Mock fetching vault state
-    const state = { totalAssets: 1000000 }; 
+    const state: VaultAlertState = { totalAssets: 1000000 };
+    const triggered: string[] = [];
     
     for (const rule of alertRules) {
-        if (rule.check(event, state)) {
-            await triggerAlert(rule, event);
+        if (rule.check(parsed.payload, state)) {
+            triggered.push(rule.name);
+            await triggerAlert(rule, parsed.payload);
         }
     }
+
+    return triggered;
 }
 
-async function triggerAlert(rule: AlertRule, event: any) {
+async function triggerAlert(rule: AlertRule, event: AlertEventPayload) {
     console.log(`[ALERT] [${rule.severity}] ${rule.name}: ${rule.description}`);
     
     // Mock channel notifications
@@ -56,7 +73,7 @@ async function triggerAlert(rule: AlertRule, event: any) {
     }
 }
 
-async function sendEmailAlert(rule: AlertRule, event: any) { console.log('Email sent'); }
-async function sendTelegramAlert(rule: AlertRule, event: any) { console.log('Telegram message sent'); }
-async function sendDiscordAlert(rule: AlertRule, event: any) { console.log('Discord webhook sent'); }
-async function sendPagerDutyAlert(rule: AlertRule, event: any) { console.log('PagerDuty incident created'); }
+async function sendEmailAlert(_rule: AlertRule, _event: AlertEventPayload) { console.log('Email sent'); }
+async function sendTelegramAlert(_rule: AlertRule, _event: AlertEventPayload) { console.log('Telegram message sent'); }
+async function sendDiscordAlert(_rule: AlertRule, _event: AlertEventPayload) { console.log('Discord webhook sent'); }
+async function sendPagerDutyAlert(_rule: AlertRule, _event: AlertEventPayload) { console.log('PagerDuty incident created'); }
