@@ -30,7 +30,7 @@ const STRATEGY_MAP: Record<string, string> = {
  * Reads vault state and portfolio details for a verified WhatsApp user.
  */
 export async function getPortfolio(phoneHash: string): Promise<UserPortfolio> {
-  const wallet = getWallet(phoneHash);
+  const wallet = await getWallet(phoneHash);
   if (!wallet) {
     throw new Error('Wallet not found');
   }
@@ -106,7 +106,7 @@ export async function handleDeposit(
   amount: number,
   strategy?: string
 ): Promise<{ success: boolean; txHash: string; message: string }> {
-  const wallet = getWallet(phoneHash);
+  const wallet = await getWallet(phoneHash);
   if (!wallet) {
     return { success: false, txHash: '', message: 'Wallet not initialized.' };
   }
@@ -129,7 +129,7 @@ export async function handleWithdraw(
   amount?: number,
   withdrawAll?: boolean
 ): Promise<{ success: boolean; txHash: string; message: string }> {
-  const wallet = getWallet(phoneHash);
+  const wallet = await getWallet(phoneHash);
   if (!wallet) {
     return { success: false, txHash: '', message: 'Wallet not initialized.' };
   }

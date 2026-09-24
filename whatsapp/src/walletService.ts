@@ -1,5 +1,6 @@
 import { Keypair } from '@stellar/stellar-sdk';
 import { encryptSecretKey, decryptSecretKey } from './cryptoUtils';
+import { query } from './db';
 
 export interface UserWallet {
   publicKey: string;
@@ -11,41 +12,64 @@ export interface UserWallet {
   createdAt: number;
 }
 
-// In-memory store for custodial wallets keyed by phone hash (in production backed by DB)
-const userWallets = new Map<string, UserWallet>();
-
 /**
  * Creates a new custodial Stellar keypair for a verified user and encrypts secret key.
  */
-export function createCustodialWallet(phoneHash: string): UserWallet {
+export async function createCustodialWallet(phoneHash: string): Promise<UserWallet> {
   const pair = Keypair.random();
   const publicKey = pair.publicKey();
   const secretKey = pair.secret();
 
   const encryptedSecret = encryptSecretKey(secretKey);
+  const createdAt = Date.now();
 
   const wallet: UserWallet = {
     publicKey,
     encryptedSecret,
-    createdAt: Date.now()
+    createdAt
   };
 
-  userWallets.set(phoneHash, wallet);
+  await query(
+    `INSERT INTO whatsapp_wallets (phone_hash, public_key, encrypted_data, iv, tag, created_at)
+     VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0))
+     ON CONFLICT (phone_hash) DO NOTHING`,
+    [
+      phoneHash,
+      publicKey,
+      encryptedSecret.encryptedData,
+      encryptedSecret.iv,
+      encryptedSecret.tag,
+      createdAt
+    ]
+  );
+
   return wallet;
 }
 
 /**
  * Retrieves a user's wallet info (public key and encrypted secret).
  */
-export function getWallet(phoneHash: string): UserWallet | undefined {
-  return userWallets.get(phoneHash);
+export async function getWallet(phoneHash: string): Promise<UserWallet | undefined> {
+  const res = await query('SELECT * FROM whatsapp_wallets WHERE phone_hash = $1', [phoneHash]);
+  if (res.rows.length === 0) return undefined;
+
+  const row = res.rows[0];
+  return {
+    publicKey: row.public_key,
+    encryptedSecret: {
+      encryptedData: row.encrypted_data,
+      iv: row.iv,
+      tag: row.tag
+    },
+    createdAt: new Date(row.created_at).getTime()
+  };
 }
 
 /**
  * Decrypts secret key for transaction execution. Key is never saved in plaintext or output to chat.
  */
-export function getDecryptedSecretKey(phoneHash: string): string | null {
-  const wallet = userWallets.get(phoneHash);
+export async function getDecryptedSecretKey(phoneHash: string): Promise<string | null> {
+  const wallet = await getWallet(phoneHash);
   if (!wallet) return null;
 
   return decryptSecretKey(

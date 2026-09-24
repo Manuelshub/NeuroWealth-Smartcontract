@@ -69,7 +69,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
 
         if (verification.success) {
           updateState(phoneHash, UserState.VERIFIED);
-          const wallet = createCustodialWallet(phoneHash);
+          const wallet = await createCustodialWallet(phoneHash);
 
           twiml.message(
             `✅ Phone number verified!\n\n` +
@@ -93,7 +93,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
 
     // Flow 3: VERIFIED User -> Handle Chat Intents
     if (session.state === UserState.VERIFIED) {
-      const wallet = getWallet(phoneHash);
+      const wallet = await getWallet(phoneHash);
       if (!wallet) {
         // Fallback state sync
         updateState(phoneHash, UserState.UNVERIFIED);
