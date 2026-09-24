@@ -9,7 +9,7 @@ function requireEnv(name: string): string {
   return value;
 }
 
-const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
+const SOROBAN_RPC_URL = requireEnv('SOROBAN_RPC_URL');
 const VAULT_CONTRACT_ID = requireEnv('VAULT_CONTRACT_ID');
 
 export interface UserPortfolio {
