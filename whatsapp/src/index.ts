@@ -3,8 +3,10 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import { handleWhatsAppWebhook } from './webhook';
 import { verifyTwilioSignature } from './twilioSignature';
+import { assertConfig } from './cryptoUtils';
 
 dotenv.config();
+assertConfig();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
