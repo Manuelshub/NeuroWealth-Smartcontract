@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import twilio from 'twilio';
+import pino from 'pino';
 import { hashPhoneNumber } from './cryptoUtils';
+
+const logger = pino({ name: 'whatsapp-webhook' });
+
 import { getSession, updateState, checkRateLimit, UserState } from './stateManager';
 import { generateOTP, verifyOTP } from './otpService';
 import { createCustodialWallet, getWallet } from './walletService';
@@ -164,7 +168,12 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
       }
     }
   } catch (error) {
-    twiml.message('❌ An error occurred processing your request. Please try again in a few moments.');
+    const reqId = `req-${Math.random().toString(36).substring(2, 9)}`;
+    logger.error(
+      { error, phoneHash, intent, state: session.state, reqId },
+      'Error processing webhook request'
+    );
+    twiml.message(`❌ An error occurred processing your request. Please try again in a few moments. (Ref: ${reqId})`);
   }
 
   res.type('text/xml').send(twiml.toString());
