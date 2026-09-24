@@ -47,11 +47,14 @@ export async function startEventListener() {
     // If the saved cursor cannot be read we refuse to start rather than
     // silently skipping to the latest ledger.
     const stored = await withRetry(() => cursor.load(), 'loadLedgerCursor');
-    let position: EventPosition = initialPosition(stored, latestLedgerResponse.sequence);
+    const startSequence = process.env.START_LEDGER
+      ? parseInt(process.env.START_LEDGER, 10)
+      : latestLedgerResponse.sequence;
+    let position: EventPosition = initialPosition(stored, startSequence);
     if (stored) {
       logger.info({ pagingToken: stored.pagingToken, ledger: stored.ledger, latestLedger: latestLedgerResponse.sequence }, 'Resuming event listener from saved cursor');
     } else {
-      logger.info({ startLedger: latestLedgerResponse.sequence }, 'Starting event listener from latest ledger (no saved cursor)');
+      logger.info({ startLedger: startSequence }, 'Starting event listener from initial ledger (no saved cursor)');
     }
 
     const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [VAULT_CONTRACT_ID] }];
