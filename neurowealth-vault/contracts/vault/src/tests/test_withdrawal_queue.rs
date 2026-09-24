@@ -28,13 +28,28 @@ fn test_withdrawal_queue_ordering_cancellation_and_processing() {
 
     // Cancel req2
     client.cancel_withdrawal_request(&user, &req_id2);
-    let req2 = client.get_withdrawal_request(&req_id2).unwrap();
-    assert!(req2.cancelled);
+    assert!(client.try_get_withdrawal_request(&req_id2).is_err());
 
     // Agent processes queue in FIFO order
     let processed = client.process_withdrawal_queue(&agent, &10u32);
     assert_eq!(processed, 1); // 1 fulfilled, 1 cancelled skipped
 
-    let req1_after = client.get_withdrawal_request(&req_id1).unwrap();
-    assert!(req1_after.fulfilled);
+    assert!(client.try_get_withdrawal_request(&req_id1).is_err());
+}
+
+#[test]
+fn test_any_authenticated_keeper_can_process_bounded_queue() {
+    let (env, client, owner, _agent, user, _, _) = setup_vault();
+    let keeper = soroban_sdk::Address::generate(&env);
+    client.set_queue_config(&owner, &100u32, &3600u64).unwrap();
+
+    for _ in 0..55 {
+        client.queue_withdrawal(&user, &1);
+    }
+
+    assert_eq!(
+        client.process_withdrawal_queue(&keeper, &u32::MAX),
+        crate::MAX_WITHDRAWAL_PROCESS_BATCH,
+    );
+    assert_eq!(client.process_withdrawal_queue(&user, &u32::MAX), 5);
 }

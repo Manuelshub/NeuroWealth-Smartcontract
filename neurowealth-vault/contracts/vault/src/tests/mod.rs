@@ -6,7 +6,6 @@ mod test_asset_breakdown;
 mod test_asset_decrease;
 mod test_asset_split;
 mod test_auth;
-mod test_balance_deprecation;
 mod test_balance_shares_invariant;
 #[cfg(feature = "blend-devnet")]
 mod test_blend_devnet;
@@ -29,6 +28,7 @@ mod test_fuzz_deposit_withdraw;
 mod test_get_user_strategy_unset;
 mod test_harvest;
 mod test_inflation_attack;
+mod test_index_pruning;
 mod test_initialize;
 mod test_legacy_inline;
 mod test_limits;

@@ -365,12 +365,6 @@ impl VaultError {
 /// storage is used for per-user data that requires efficient access.
 #[contracttype]
 pub enum DataKey {
-    /// Legacy user's principal USDC balance (key: user Address).
-    ///
-    /// Deprecated: retained only to preserve the serialized `DataKey` layout
-    /// across upgrades. New accounting must not read or write this key; user
-    /// balances are derived from `Shares(user)` and the current exchange rate.
-    Balance(Address),
     /// User's share balance (key: user Address).
     /// Represents proportional ownership of the vault's total assets.
     Shares(Address),
@@ -605,6 +599,8 @@ pub enum DataKey {
     WithdrawalRequest(u32),
     /// Ordered list of pending (non-fulfilled, non-cancelled) request IDs.
     QueueOrder,
+    /// Withdrawal queue storage schema version used by lazy compaction.
+    WithdrawalQueueStorageVersion,
 }
 
 /// Owner-configured allowance for one rate-limit category.
@@ -2018,6 +2014,11 @@ const DEFAULT_BATCH_DEPOSIT_RATE_LIMIT_MAX_CALLS: u32 = 100;
 const DEFAULT_BATCH_DEPOSIT_RATE_LIMIT_WINDOW: u32 = 720;
 /// Maximum number of `(token, amount)` entries accepted by `batch_deposit` by default.
 const DEFAULT_MAX_BATCH_SIZE: u32 = 50;
+/// Maximum raw user-index slots scanned by one pagination call.
+pub const MAX_USERS_PER_PAGE: u32 = 200;
+/// Maximum withdrawal requests inspected by one permissionless queue call.
+pub const MAX_WITHDRAWAL_PROCESS_BATCH: u32 = 50;
+const WITHDRAWAL_QUEUE_STORAGE_VERSION: u32 = 2;
 
 /// Minimum ledgers remaining before `touch_user_ttl` extends a user's `Shares` entry.
 const USER_SHARES_TTL_THRESHOLD: u32 = 100;
@@ -3006,6 +3007,11 @@ impl NeuroWealthVault {
             .persistent()
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
 
+        // Prune user from index when shares reach zero (Issue #440)
+        if new_user_shares == 0 {
+            Self::prune_user_from_index(&env, &user);
+        }
+
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
             .expect("vault: withdrawal underflow");
@@ -3168,6 +3174,11 @@ impl NeuroWealthVault {
         env.storage()
             .persistent()
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
+
+        // Prune user from index when shares reach zero (Issue #440)
+        if new_user_shares == 0 {
+            Self::prune_user_from_index(&env, &user);
+        }
 
         // Update total shares
         let new_total_shares = total_shares
@@ -5340,6 +5351,14 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
+    /// DEPRECATED: Use `set_caps` instead
+    /// 
+    /// This function is marked for removal in the next major version.
+    /// See DEPRECATION.md for migration guidance.
+    #[deprecated(
+        since = "1.x",
+        note = "Use set_caps() or set_deposit_limits() instead. See DEPRECATION.md"
+    )]
     pub fn set_limits(env: Env, min: i128, max: i128) -> Result<(), VaultError> {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -7765,6 +7784,38 @@ impl NeuroWealthVault {
         }
     }
 
+    /// Remove a user from the UserSharesIndex when their shares reach zero.
+    /// This is called on full withdrawal to prevent append-only index growth
+    /// and the associated CPU/memory degradation (Issue #440).
+    /// 
+    /// Uses a linear scan with rebuild: O(n) but executed infrequently (only
+    /// on full withdrawal). For n >> 500, consider a secondary hash-based
+    /// removal index in a future optimization.
+    fn prune_user_from_index(env: &Env, user: &Address) {
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserSharesIndex)
+            .unwrap_or_else(|| Vec::new(env));
+        
+        // Fast path: if user not in index, nothing to do
+        if !index.contains(user) {
+            return;
+        }
+        
+        // Rebuild the index without the user
+        let mut new_index = Vec::new(env);
+        for addr in index.iter() {
+            if addr != *user {
+                new_index.push_back(addr);
+            }
+        }
+        
+        env.storage()
+            .instance()
+            .set(&DataKey::UserSharesIndex, &new_index);
+    }
+
     /// Returns the effective circuit-breaker threshold (Issue #439), falling
     /// back to [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] for instances initialized
     /// before the circuit breaker existed.
@@ -8050,13 +8101,14 @@ impl NeuroWealthVault {
     ///
     /// * `env` - The Soroban environment.
     /// * `start` - Zero-based index offset to begin the page at.
-    /// * `limit` - Maximum number of index slots to scan for this page.
+    /// * `limit` - Requested number of index slots to scan. Values above
+    ///   [`MAX_USERS_PER_PAGE`] are clamped to that bound.
     ///
     /// # Returns
     ///
-    /// A `Vec<(Address, i128)>` of holders in `[start, start + limit)` whose
-    /// share balance is strictly positive. Empty when `limit == 0` or `start` is
-    /// beyond the end of the index.
+    /// A pair containing holders in insertion order and the raw index offset for
+    /// the next page. The hint is `None` once the end is reached. The vector is
+    /// empty when `limit == 0` or `start` is beyond the end of the index.
     ///
     /// # Events
     ///
@@ -8065,12 +8117,16 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
-    pub fn get_users_with_shares(env: Env, start: u32, limit: u32) -> Vec<(Address, i128)> {
+    pub fn get_users_with_shares(
+        env: Env,
+        start: u32,
+        limit: u32,
+    ) -> (Vec<(Address, i128)>, Option<u32>) {
         Self::require_initialized(&env);
 
         let mut result: Vec<(Address, i128)> = Vec::new(&env);
         if limit == 0 {
-            return result;
+            return (result, None);
         }
 
         let index: Vec<Address> = env
@@ -8081,9 +8137,10 @@ impl NeuroWealthVault {
 
         let len = index.len();
         if start >= len {
-            return result;
+            return (result, None);
         }
-        let end = core::cmp::min(start.saturating_add(limit), len);
+        let bounded_limit = core::cmp::min(limit, MAX_USERS_PER_PAGE);
+        let end = core::cmp::min(start.saturating_add(bounded_limit), len);
 
         for i in start..end {
             let user = index.get(i).unwrap();
@@ -8093,7 +8150,8 @@ impl NeuroWealthVault {
             }
         }
 
-        result
+        let next_start = if end < len { Some(end) } else { None };
+        (result, next_start)
     }
 
     /// Extends the persistent TTL for a user's `Shares` entry.
@@ -9136,7 +9194,7 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         user.require_auth();
 
-        let mut request: WithdrawalRequest = env
+        let request: WithdrawalRequest = env
             .storage()
             .instance()
             .get(&DataKey::WithdrawalRequest(request_id))
@@ -9150,10 +9208,24 @@ impl NeuroWealthVault {
             VaultError::UnauthorizedOwnerError,
         );
 
-        request.cancelled = true;
         env.storage()
             .instance()
-            .set(&DataKey::WithdrawalRequest(request_id), &request);
+            .remove(&DataKey::WithdrawalRequest(request_id));
+
+        let order: Vec<u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::QueueOrder)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut remaining = Vec::new(&env);
+        for id in order.iter() {
+            if id != request_id {
+                remaining.push_back(id);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::QueueOrder, &remaining);
 
         env.events().publish(
             (TOPIC_WITHDRAWAL_CANCELLED,),
@@ -9164,22 +9236,29 @@ impl NeuroWealthVault {
         );
     }
 
-    /// Processes pending withdrawal requests in FIFO order. Only the agent may call.
+    /// Processes pending withdrawal requests in FIFO order. Any authenticated
+    /// caller may advance the queue so withdrawals cannot stall when the
+    /// configured operator is unavailable.
     ///
     /// Skips cancelled and expired requests. Processes up to `batch_size` requests.
     /// Returns the number of requests successfully fulfilled.
     ///
     /// # Arguments
     /// * `env` - Soroban environment.
-    /// * `agent` - The AI agent address (must be authorized).
-    /// * `batch_size` - Maximum number of requests to process in this call.
+    /// * `agent` - The authenticated caller (kept for ABI compatibility).
+    /// * `batch_size` - Requested number of requests to inspect, capped at
+    ///   [`MAX_WITHDRAWAL_PROCESS_BATCH`].
     ///
     /// # Events
     /// Emits `WithdrawalFulfilledEvent` for each fulfilled request.
     pub fn process_withdrawal_queue(env: Env, agent: Address, batch_size: u32) -> u32 {
         Self::require_initialized(&env);
-        Self::require_is_agent(&env);
         agent.require_auth();
+
+        let batch_size = core::cmp::min(batch_size, MAX_WITHDRAWAL_PROCESS_BATCH);
+        if batch_size == 0 {
+            return 0;
+        }
 
         let config: QueueConfig = env
             .storage()
@@ -9189,50 +9268,53 @@ impl NeuroWealthVault {
 
         let current_timestamp = env.ledger().timestamp();
 
-        let mut order: Vec<u32> = env
+        let order: Vec<u32> = env
             .storage()
             .instance()
             .get(&DataKey::QueueOrder)
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut processed = 0u32;
-        let mut fulfilled_ids = Vec::new(&env);
         let mut new_order = Vec::new(&env);
+        let mut inspected = 0u32;
 
         for id in order.iter() {
-            if processed >= batch_size {
+            if inspected >= batch_size {
                 new_order.push_back(id);
                 continue;
             }
+            inspected += 1;
 
-            let mut request: WithdrawalRequest = env
+            let Some(request): Option<WithdrawalRequest> = env
                 .storage()
                 .instance()
                 .get(&DataKey::WithdrawalRequest(id))
-                .expect("withdrawal request missing from storage");
+            else {
+                // Compact legacy queue entries whose records were already removed.
+                continue;
+            };
 
-            // Skip cancelled requests
-            if request.cancelled {
+            // Compact terminal records created by older contract versions.
+            if request.cancelled || request.fulfilled {
+                env.storage()
+                    .instance()
+                    .remove(&DataKey::WithdrawalRequest(id));
                 continue;
             }
 
-            // Skip already fulfilled requests
-            if request.fulfilled {
-                continue;
-            }
-
-            // Skip expired requests
+            // Expired requests are terminal and must not occupy storage forever.
             if config.ttl > 0 && current_timestamp > request.created_at + config.ttl {
+                env.storage()
+                    .instance()
+                    .remove(&DataKey::WithdrawalRequest(id));
                 continue;
             }
 
-            // Fulfil the request
-            request.fulfilled = true;
+            // Fulfil the request and prune its terminal record.
             env.storage()
                 .instance()
-                .set(&DataKey::WithdrawalRequest(id), &request);
+                .remove(&DataKey::WithdrawalRequest(id));
 
-            fulfilled_ids.push_back(id);
             processed += 1;
 
             env.events().publish(
@@ -9245,16 +9327,13 @@ impl NeuroWealthVault {
             );
         }
 
-        // Update the queue order: remove fulfilled entries
-        let mut final_order = Vec::new(&env);
-        for id in order.iter() {
-            if !fulfilled_ids.contains(id) {
-                final_order.push_back(id);
-            }
-        }
         env.storage()
             .instance()
-            .set(&DataKey::QueueOrder, &final_order);
+            .set(&DataKey::QueueOrder, &new_order);
+        env.storage().instance().set(
+            &DataKey::WithdrawalQueueStorageVersion,
+            &WITHDRAWAL_QUEUE_STORAGE_VERSION,
+        );
 
         processed
     }

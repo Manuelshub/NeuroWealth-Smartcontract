@@ -2,6 +2,7 @@ import { rpc } from '@stellar/stellar-sdk';
 import { pool } from './db';
 import { evaluateYield } from './yieldComparison';
 import { processEventForAlerts } from './alertEngine';
+import { AlertEventPayload, AlertEventType } from './alertEventPayload';
 import logger from './logger';
 import { withRetry } from './retry';
 import { createLedgerCursorStore, EventPosition, initialPosition, isStalePositionError, LedgerCursor } from './ledgerCursor';
@@ -109,7 +110,7 @@ export async function startEventListener() {
   }
 }
 
-async function handleVaultEvent(eventType: string, event: rpc.Api.EventResponse) {
+async function handleVaultEvent(eventType: AlertEventType, event: rpc.Api.EventResponse) {
   logger.info({ eventType, ledger: event.ledger }, 'Detected event');
 
   await logEventToDb(eventType, event.id, event.ledger);
@@ -147,14 +148,13 @@ async function handleVaultEvent(eventType: string, event: rpc.Api.EventResponse)
   }
 
   if (payload) {
-    await processEventForAlerts({
+    const alertPayload: AlertEventPayload = {
       type: eventType,
       amount: payload.amount,
-      rawAmount: payload.rawAmount.toString(),
       user: payload.user,
-      eventId: event.id,
       ledger: event.ledger,
-    });
+    };
+    await processEventForAlerts(alertPayload);
   }
 }
 
