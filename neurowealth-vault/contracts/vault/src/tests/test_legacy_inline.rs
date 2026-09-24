@@ -88,7 +88,7 @@ fn test_set_limits() {
     let new_min = 20_000_000_000_i128;
     let new_max = 200_000_000_000_i128;
 
-    client.set_limits(&new_min, &new_max);
+    client.set_caps(&new_min, &new_max);
 
     assert_eq!(client.get_user_deposit_cap(), new_min);
     assert_eq!(client.get_tvl_cap(), new_max);

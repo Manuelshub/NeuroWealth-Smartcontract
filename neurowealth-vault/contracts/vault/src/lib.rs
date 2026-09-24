@@ -365,12 +365,6 @@ impl VaultError {
 /// storage is used for per-user data that requires efficient access.
 #[contracttype]
 pub enum DataKey {
-    /// Legacy user's principal USDC balance (key: user Address).
-    ///
-    /// Deprecated: retained only to preserve the serialized `DataKey` layout
-    /// across upgrades. New accounting must not read or write this key; user
-    /// balances are derived from `Shares(user)` and the current exchange rate.
-    Balance(Address),
     /// User's share balance (key: user Address).
     /// Represents proportional ownership of the vault's total assets.
     Shares(Address),
@@ -3006,6 +3000,11 @@ impl NeuroWealthVault {
             .persistent()
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
 
+        // Prune user from index when shares reach zero (Issue #440)
+        if new_user_shares == 0 {
+            Self::prune_user_from_index(&env, &user);
+        }
+
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
             .expect("vault: withdrawal underflow");
@@ -3168,6 +3167,11 @@ impl NeuroWealthVault {
         env.storage()
             .persistent()
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
+
+        // Prune user from index when shares reach zero (Issue #440)
+        if new_user_shares == 0 {
+            Self::prune_user_from_index(&env, &user);
+        }
 
         // Update total shares
         let new_total_shares = total_shares
@@ -5340,6 +5344,14 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
+    /// DEPRECATED: Use `set_caps` instead
+    /// 
+    /// This function is marked for removal in the next major version.
+    /// See DEPRECATION.md for migration guidance.
+    #[deprecated(
+        since = "1.x",
+        note = "Use set_caps() or set_deposit_limits() instead. See DEPRECATION.md"
+    )]
     pub fn set_limits(env: Env, min: i128, max: i128) -> Result<(), VaultError> {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -7763,6 +7775,38 @@ impl NeuroWealthVault {
                 .instance()
                 .set(&DataKey::UserSharesIndex, &index);
         }
+    }
+
+    /// Remove a user from the UserSharesIndex when their shares reach zero.
+    /// This is called on full withdrawal to prevent append-only index growth
+    /// and the associated CPU/memory degradation (Issue #440).
+    /// 
+    /// Uses a linear scan with rebuild: O(n) but executed infrequently (only
+    /// on full withdrawal). For n >> 500, consider a secondary hash-based
+    /// removal index in a future optimization.
+    fn prune_user_from_index(env: &Env, user: &Address) {
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserSharesIndex)
+            .unwrap_or_else(|| Vec::new(env));
+        
+        // Fast path: if user not in index, nothing to do
+        if !index.contains(user) {
+            return;
+        }
+        
+        // Rebuild the index without the user
+        let mut new_index = Vec::new(env);
+        for addr in index.iter() {
+            if addr != *user {
+                new_index.push_back(addr);
+            }
+        }
+        
+        env.storage()
+            .instance()
+            .set(&DataKey::UserSharesIndex, &new_index);
     }
 
     /// Returns the effective circuit-breaker threshold (Issue #439), falling

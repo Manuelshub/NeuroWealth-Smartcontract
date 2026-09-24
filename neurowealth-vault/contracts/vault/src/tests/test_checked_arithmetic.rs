@@ -35,7 +35,7 @@ fn test_large_deposit_within_range_succeeds() {
     let token = TestTokenClient::new(&env, &usdc_token);
 
     // Disable per-user / TVL caps and raise the per-deposit max to allow a huge deposit.
-    client.set_limits(&0, &0);
+    client.set_caps(&0, &0);
     set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     let user = Address::generate(&env);
@@ -67,7 +67,7 @@ fn test_convert_to_shares_mul_overflow_is_checked() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let token = TestTokenClient::new(&env, &usdc_token);
 
-    client.set_limits(&0, &0);
+    client.set_caps(&0, &0);
     set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     // Bootstrap a large share supply: total_shares == total_assets == 1e18.
@@ -136,7 +136,7 @@ fn test_large_balance_full_withdraw() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let token = TestTokenClient::new(&env, &usdc_token);
 
-    client.set_limits(&0, &0);
+    client.set_caps(&0, &0);
     set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     let user = Address::generate(&env);
@@ -164,7 +164,7 @@ fn test_update_total_assets_decrease_bound_overflow_is_checked() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let token = TestTokenClient::new(&env, &usdc_token);
 
-    client.set_limits(&0, &0);
+    client.set_caps(&0, &0);
     set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     // Drive stored TotalAssets to i128::MAX via a max-sized deposit.
