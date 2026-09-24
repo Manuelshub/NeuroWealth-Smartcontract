@@ -58,6 +58,12 @@ export function verifyTwilioSignature(
       return;
     }
 
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https';
+    if (nodeEnv === 'production' && !isHttps) {
+      res.status(403).send('HTTPS required in production');
+      return;
+    }
+
     const signature = req.get('X-Twilio-Signature');
     if (!signature) {
       res.status(403).send('Missing Twilio signature');

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 
-function requireEnv(name: string): string {
+function getEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`${name} must be set; refusing to use an unsafe production default`);
@@ -10,26 +10,31 @@ function requireEnv(name: string): string {
   return value;
 }
 
-const ENCRYPTION_KEY = requireEnv('ENCRYPTION_KEY');
-if (ENCRYPTION_KEY.length < 32) {
-  throw new Error('ENCRYPTION_KEY must be at least 32 characters');
+export function assertConfig(): void {
+  const key = getEnv('ENCRYPTION_KEY');
+  if (key.length < 32) {
+    throw new Error('ENCRYPTION_KEY must be at least 32 characters');
+  }
+  getEnv('PHONE_HASH_SALT');
 }
-const PHONE_HASH_SALT = requireEnv('PHONE_HASH_SALT');
 
 /**
  * Hashes phone number to ensure PII privacy at rest.
  * Uses SHA-256 with a deployment-provided salt.
  */
 export function hashPhoneNumber(phone: string): string {
-  return crypto.createHash('sha256').update(phone + PHONE_HASH_SALT).digest('hex');
+  const salt = getEnv('PHONE_HASH_SALT');
+  const hashedSalt = crypto.createHash('sha256').update(salt).digest('hex');
+  return crypto.createHash('sha256').update(phone + hashedSalt).digest('hex');
 }
 
 /**
  * Encrypts sensitive custodial Stellar secret key before saving to storage.
  */
 export function encryptSecretKey(secretKey: string): { encryptedData: string; iv: string; tag: string } {
+  const encryptionKey = getEnv('ENCRYPTION_KEY');
   const iv = crypto.randomBytes(12);
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+  const key = crypto.scryptSync(encryptionKey, 'salt', 32);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
   let encrypted = cipher.update(secretKey, 'utf8', 'hex');
@@ -48,7 +53,8 @@ export function encryptSecretKey(secretKey: string): { encryptedData: string; iv
  * Never log or expose the output of this function.
  */
 export function decryptSecretKey(encryptedData: string, iv: string, tag: string): string {
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+  const encryptionKey = getEnv('ENCRYPTION_KEY');
+  const key = crypto.scryptSync(encryptionKey, 'salt', 32);
   const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'hex'));
   decipher.setAuthTag(Buffer.from(tag, 'hex'));
 
