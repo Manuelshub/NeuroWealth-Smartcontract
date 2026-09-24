@@ -11,11 +11,21 @@ export interface ConversationSession {
   rateLimitWindowStart: number;
 }
 
+const MAX_IN_MEMORY_SESSIONS = 10000;
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes session inactivity timeout
 const RATE_LIMIT_MAX_MESSAGES = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
 
 const sessions = new Map<string, ConversationSession>();
+
+function sweepStaleSessions(): void {
+  const now = Date.now();
+  for (const [hash, session] of sessions.entries()) {
+    if (now - session.lastMessageTime > SESSION_TIMEOUT_MS) {
+      sessions.delete(hash);
+    }
+  }
+}
 
 /**
  * Retrieves session for phone hash, resetting if timed out.
@@ -24,7 +34,23 @@ export function getSession(phoneHash: string): ConversationSession {
   const now = Date.now();
   let session = sessions.get(phoneHash);
 
+  // Session timeout check
+  if (session && now - session.lastMessageTime > SESSION_TIMEOUT_MS) {
+    sessions.delete(phoneHash);
+    session = undefined;
+  }
+
   if (!session) {
+    if (sessions.size >= MAX_IN_MEMORY_SESSIONS) {
+      sweepStaleSessions();
+      if (sessions.size >= MAX_IN_MEMORY_SESSIONS) {
+        const firstKey = sessions.keys().next().value;
+        if (firstKey) {
+          sessions.delete(firstKey);
+        }
+      }
+    }
+
     session = {
       state: UserState.UNVERIFIED,
       lastMessageTime: now,
@@ -35,14 +61,12 @@ export function getSession(phoneHash: string): ConversationSession {
     return session;
   }
 
-  // Session timeout check
-  if (now - session.lastMessageTime > SESSION_TIMEOUT_MS) {
-    session.state = UserState.UNVERIFIED;
-    session.messageCount = 0;
-    session.rateLimitWindowStart = now;
-  }
-
   session.lastMessageTime = now;
+  
+  // Maintain LRU order
+  sessions.delete(phoneHash);
+  sessions.set(phoneHash, session);
+  
   return session;
 }
 
