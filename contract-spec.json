@@ -2603,6 +2603,40 @@
       "state_changing": false
     },
     {
+      "name": "get_vault_health_snapshot",
+      "category": "queries",
+      "access": "public",
+      "description": "Returns a read-only snapshot of vault health and operational state (#838)",
+      "parameters": [
+        {
+          "name": "env",
+          "type": "Env"
+        }
+      ],
+      "returns": "VaultHealthSnapshot",
+      "requires_auth": false,
+      "state_changing": false
+    },
+    {
+      "name": "get_withdrawal_eligibility",
+      "category": "queries",
+      "access": "public",
+      "description": "Returns the next withdrawal eligibility for a user (#846)",
+      "parameters": [
+        {
+          "name": "env",
+          "type": "Env"
+        },
+        {
+          "name": "user",
+          "type": "Address"
+        }
+      ],
+      "returns": "WithdrawalEligibility",
+      "requires_auth": false,
+      "state_changing": false
+    },
+    {
       "name": "cancel_withdrawal_request",
       "category": "management",
       "access": "public",

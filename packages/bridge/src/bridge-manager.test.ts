@@ -43,6 +43,10 @@ const config: BridgeConfig = {
   bridgeFeePercentage: 0.5,
   minBridgeAmount: 1_000_000n,
   maxBridgeAmount: 10_000_000_000n,
+  confirmationDepths: {
+    stellar: 10,
+    ethereum: 12,
+  },
 };
 
 const ALL_STATUSES: BridgeStatus[] = [
