@@ -6,6 +6,7 @@ export {
   BridgeManager,
   ALLOWED_TRANSITIONS,
   canTransition,
+  WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
 } from "./bridge-manager";
 export { InMemoryBridgeStore, SqlBridgeStore } from "./bridge-store";
 export { BridgeMonitor } from "./bridge-monitor";
