@@ -33,6 +33,9 @@ export interface BridgeConfig {
   bridgeFeePercentage: number; // 0.5 = 0.5%
   minBridgeAmount: bigint;
   maxBridgeAmount: bigint;
+
+  // #851 - Confirmation depth settings per destination chain
+  confirmationDepths: Record<BridgeChain, number>; // Number of blocks/ledgers to wait before confirming
 }
 
 export interface BridgeTransfer {
@@ -52,6 +55,9 @@ export interface BridgeTransfer {
   updatedAt: number;
   errorMessage?: string;
   estimatedArrivalTime?: number;
+  idempotencyKey?: string; // #849 - Idempotency key for safe retries
+  currentConfirmationDepth?: number; // #851 - Current confirmation depth for monitoring
+  requiredConfirmationDepth?: number; // #851 - Required confirmation depth for this transfer
 }
 
 export interface BridgeQuote {

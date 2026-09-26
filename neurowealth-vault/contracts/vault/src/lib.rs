@@ -1633,6 +1633,60 @@ pub struct UserInfo {
     pub shares: i128,
 }
 
+/// Read-only snapshot of vault health and operational state (#838).
+///
+/// Returned by [`NeuroWealthVault::get_vault_health_snapshot`]. This snapshot
+/// consolidates multiple health indicators into a single atomic read to avoid
+/// cross-ledger inconsistencies when monitoring vault status.
+///
+/// This is a return type, not an event: it is never published to the event log.
+#[contracttype]
+pub struct VaultHealthSnapshot {
+    /// Whether the vault has been initialized.
+    pub initialized: bool,
+    /// Emergency pause state.
+    pub paused: bool,
+    /// Maximum total value locked (USDC in 7-decimal units).
+    pub tvl_cap: i128,
+    /// Total managed assets (principal + yield) in USDC 7-decimal units.
+    pub total_assets: i128,
+    /// Total vault shares in circulation.
+    pub total_shares: i128,
+    /// Idle USDC balance (funds not deployed to protocols).
+    pub idle_assets: i128,
+    /// USDC deployed to external yield protocols.
+    pub deployed_assets: i128,
+    /// Active protocol summary ("blend", "dex", "multi", "none").
+    pub current_protocol: Symbol,
+    /// Count of consecutive failed rebalances (circuit-breaker state).
+    pub active_failure_count: u32,
+    /// Whether an agent rotation is pending (timelock in progress).
+    pub pending_agent_update: bool,
+    /// Whether a contract upgrade is pending (timelock in progress).
+    pub pending_upgrade: bool,
+    /// Whether an ownership transfer is pending.
+    pub pending_ownership_transfer: bool,
+}
+
+/// Withdrawal eligibility information for a user (#846).
+///
+/// Returned by [`NeuroWealthVault::get_withdrawal_eligibility`]. This indicates
+/// when a user can next withdraw based on queue state, cooldowns, and pause status.
+///
+/// This is a return type, not an event: it is never published to the event log.
+#[contracttype]
+pub struct WithdrawalEligibility {
+    /// The ledger at which the user can next withdraw.
+    /// If `eligible_now` is true, this is the current ledger.
+    /// If `eligible_now` is false, this is the future ledger when eligibility resumes.
+    pub eligible_ledger: u32,
+    /// Whether the user can withdraw immediately.
+    pub eligible_now: bool,
+    /// Reason for ineligibility (empty if eligible).
+    /// Possible values: "paused", "cooldown", "queue", "insufficient_shares".
+    pub reason: Symbol,
+}
+
 /// Emitted when a user migrates their shares to a new vault (#637).
 ///
 /// # Topics
@@ -8622,6 +8676,135 @@ impl NeuroWealthVault {
             .unwrap_or(false)
     }
 
+    /// Returns a read-only snapshot of vault health and operational state (#838).
+    ///
+    /// This function consolidates multiple health indicators into a single atomic
+    /// read to avoid cross-ledger inconsistencies when monitoring vault status.
+    /// It performs no storage mutations, emits no events, and has no authorization
+    /// side effects.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// A `VaultHealthSnapshot` containing:
+    /// - `initialized`: Whether the vault has been initialized
+    /// - `paused`: Emergency pause state
+    /// - `tvl_cap`: Maximum total value locked
+    /// - `total_assets`: Total managed assets (principal + yield)
+    /// - `total_shares`: Total vault shares in circulation
+    /// - `idle_assets`: Idle USDC balance (not deployed to protocols)
+    /// - `deployed_assets`: USDC deployed to external yield protocols
+    /// - `current_protocol`: Active protocol summary
+    /// - `active_failure_count`: Consecutive failed rebalances
+    /// - `pending_agent_update`: Whether agent rotation is pending
+    /// - `pending_upgrade`: Whether contract upgrade is pending
+    /// - `pending_ownership_transfer`: Whether ownership transfer is pending
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// None.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let snapshot = vault_client.get_vault_health_snapshot();
+    /// if !snapshot.paused && snapshot.active_failure_count < 3 {
+    ///     // Vault is healthy and operational
+    /// }
+    /// ```
+    pub fn get_vault_health_snapshot(env: Env) -> VaultHealthSnapshot {
+        // Check initialization without requiring it - return false if not initialized
+        let initialized = env.storage().instance().has(&DataKey::TotalAssets);
+
+        if !initialized {
+            return VaultHealthSnapshot {
+                initialized: false,
+                paused: false,
+                tvl_cap: 0,
+                total_assets: 0,
+                total_shares: 0,
+                idle_assets: 0,
+                deployed_assets: 0,
+                current_protocol: symbol_short!("none"),
+                active_failure_count: 0,
+                pending_agent_update: false,
+                pending_upgrade: false,
+                pending_ownership_transfer: false,
+            };
+        }
+
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+
+        let tvl_cap = env
+            .storage()
+            .instance()
+            .get(&DataKey::TvLCap)
+            .unwrap_or(DEFAULT_TVL_CAP);
+
+        let total_assets = Self::get_total_assets_internal(&env);
+        let total_shares = Self::get_total_shares_internal(&env);
+
+        let idle_assets = {
+            let usdc: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+            token::Client::new(&env, &usdc).balance(&env.current_contract_address())
+        };
+
+        let deployed_assets = {
+            let protocol: Symbol = env
+                .storage()
+                .instance()
+                .get(&DataKey::CurrentProtocol)
+                .unwrap_or(symbol_short!("none"));
+            Self::get_protocol_balance(&env, &protocol)
+        };
+
+        let current_protocol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+
+        let active_failure_count = env
+            .storage()
+            .instance()
+            .get(&DataKey::ConsecutiveFailures)
+            .unwrap_or(0);
+
+        let pending_agent_update = env.storage().instance().has(&DataKey::PendingAgent);
+        let pending_upgrade = env.storage().instance().has(&DataKey::PendingUpgradeHash);
+        let pending_ownership_transfer = env.storage().instance().has(&DataKey::PendingOwner);
+
+        VaultHealthSnapshot {
+            initialized: true,
+            paused,
+            tvl_cap,
+            total_assets,
+            total_shares,
+            idle_assets,
+            deployed_assets,
+            current_protocol,
+            active_failure_count,
+            pending_agent_update,
+            pending_upgrade,
+            pending_ownership_transfer,
+        }
+    }
+
     /// Returns the contract version.
     ///
     /// Used to track upgrades and ensure compatibility with external systems.
@@ -9234,6 +9417,161 @@ impl NeuroWealthVault {
                 user,
             },
         );
+    }
+
+    /// Returns the next withdrawal eligibility for a user (#846).
+    ///
+    /// This function provides a deterministic read value for when a queued or
+    /// cooldown-constrained withdrawal can next progress. It checks pause state,
+    /// minimum holding period, queue position, and share balance.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `user` - Address of the user to check.
+    ///
+    /// # Returns
+    ///
+    /// A `WithdrawalEligibility` containing:
+    /// - `eligible_ledger`: The ledger at which the user can next withdraw
+    /// - `eligible_now`: Whether the user can withdraw immediately
+    /// - `reason`: Reason for ineligibility (empty if eligible)
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// None.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let eligibility = vault_client.get_withdrawal_eligibility(&user);
+    /// if eligibility.eligible_now {
+    ///     vault_client.withdraw(&user, &amount);
+    /// } else {
+    ///     println!("Can withdraw at ledger {}", eligibility.eligible_ledger);
+    /// }
+    /// ```
+    pub fn get_withdrawal_eligibility(env: Env, user: Address) -> WithdrawalEligibility {
+        // Check initialization without requiring it
+        let initialized = env.storage().instance().has(&DataKey::TotalAssets);
+
+        if !initialized {
+            return WithdrawalEligibility {
+                eligible_ledger: 0,
+                eligible_now: false,
+                reason: symbol_short!("not_initialized"),
+            };
+        }
+
+        let current_ledger = env.ledger().sequence();
+
+        // Check pause state
+        let paused = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+
+        if paused {
+            return WithdrawalEligibility {
+                eligible_ledger: 0, // Unknown when pause will be lifted
+                eligible_now: false,
+                reason: symbol_short!("paused"),
+            };
+        }
+
+        // Check if user has shares
+        let user_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Shares(user.clone()))
+            .unwrap_or(0);
+
+        if user_shares == 0 {
+            return WithdrawalEligibility {
+                eligible_ledger: 0,
+                eligible_now: false,
+                reason: symbol_short!("insufficient_shares"),
+            };
+        }
+
+        // Check minimum holding period
+        let min_holding_period: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinHoldingPeriod)
+            .unwrap_or(0);
+
+        if min_holding_period > 0 {
+            let last_deposit_ledger: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LastDepositLedger(user.clone()))
+                .unwrap_or(0);
+
+            if last_deposit_ledger > 0 {
+                let holding_elapsed = current_ledger.saturating_sub(last_deposit_ledger);
+                if holding_elapsed < min_holding_period {
+                    let eligible_ledger = last_deposit_ledger + min_holding_period;
+                    return WithdrawalEligibility {
+                        eligible_ledger,
+                        eligible_now: false,
+                        reason: symbol_short!("cooldown"),
+                    };
+                }
+            }
+        }
+
+        // Check if user has a pending withdrawal request in the queue
+        let order: Vec<u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::QueueOrder)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut user_position_in_queue: Option<u32> = None;
+        for (index, request_id) in order.iter().enumerate() {
+            if let Some(request) = env
+                .storage()
+                .instance()
+                .get(&DataKey::WithdrawalRequest(*request_id))
+            {
+                if request.user == user && !request.fulfilled && !request.cancelled {
+                    user_position_in_queue = Some(index as u32);
+                    break;
+                }
+            }
+        }
+
+        if let Some(position) = user_position_in_queue {
+            // User is in queue - estimate processing time based on position
+            // Assume batch processing of MAX_WITHDRAWAL_PROCESS_BATCH per call
+            const BATCH_SIZE: u32 = 10;
+            let estimated_batches = (position / BATCH_SIZE) + 1;
+            // Assume one batch per ledger (conservative estimate)
+            let eligible_ledger = current_ledger + estimated_batches;
+
+            return WithdrawalEligibility {
+                eligible_ledger,
+                eligible_now: false,
+                reason: symbol_short!("queue"),
+            };
+        }
+
+        // User is eligible to withdraw immediately
+        WithdrawalEligibility {
+            eligible_ledger: current_ledger,
+            eligible_now: true,
+            reason: symbol_short!(""),
+        }
     }
 
     /// Processes pending withdrawal requests in FIFO order. Any authenticated
